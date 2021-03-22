@@ -359,6 +359,12 @@ class History:
         last_ps = jstate.get_last_stats()
         self.finish_job("server_exit", last_ps)
 
+    def add_job_metadata(self, job_id, data):
+        job = self.get_job(job_id)
+        job['metadata'].update(data)
+        self.history_ns[job_id] = job
+
+
 class PrinterJob:
     def __init__(self, data: Dict[str, Any] = {}) -> None:
         self.end_time: Optional[float] = None
