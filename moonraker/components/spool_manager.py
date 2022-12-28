@@ -10,8 +10,8 @@ import math
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from typing import Set, Optional, List
-    from components.database import NamespaceWrapper
-    from websockets import WebRequest
+    from database import NamespaceWrapper
+    from moonraker.websockets import WebRequest
 
 
 SPOOL_NAMESPACE = "spool_manager"
