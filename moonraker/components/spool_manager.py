@@ -7,7 +7,8 @@ from __future__ import annotations
 import logging
 import time
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, Any
+
 if TYPE_CHECKING:
     from typing import Set, Optional, List
     from database import NamespaceWrapper
@@ -83,6 +84,9 @@ class SpoolManager:
             MOONRAKER_NAMESPACE, parse_keys=False)
 
         self.handler = SpoolManagerHandler(self.server, self)
+
+    def on_exit(self):
+        self.track_filament_usage()
 
     def _parse_materials_cfg(self, config):
         materials_cfg = config.get('materials', '').strip()
@@ -163,11 +167,13 @@ class SpoolManager:
 
         return dict(spools)
 
-    def track_filament_usage(self, job_id: str, used_length: float):
+    def track_filament_usage(self):
         spool_id = self.get_active_spool_id()
         spool = self.find_spool(spool_id)
 
         if spool:
+            used_length = self.handler.extruded
+
             old_used_length = spool.used_length
             old_used_weight = spool.used_weight()
 
@@ -192,14 +198,13 @@ class SpoolManager:
 
             self.update_spool(spool_id, spool.serialize())
 
-            history = self.server.lookup_component('history', None)
             metadata = {'spool_id': spool_id,
                         'used_weight': used_weight,
                         'cost': used_cost}
 
             self.server.send_event('spool_manager:filament_used', metadata)
 
-            history.add_job_metadata(job_id, {'spool': metadata})
+            self.handler.extruded = 0
 
             logging.info(f'Tracking filament usage, spool_id: {spool_id}, ' +
                          f'length: {used_length}, ' +
@@ -217,13 +222,16 @@ class SpoolManagerHandler:
     def __init__(self, server, spool_manager: SpoolManager):
         self.spool_manager = spool_manager
         self.server = server
+        self.lastEpos = 0
+        self.extruded = 0
 
         self._register_listeners()
         self._register_endpoints()
 
     def _register_listeners(self):
-        self.server.register_event_handler('history:history_changed',
-                                           self._handle_history_changed)
+        self.server.register_event_handler('server:klippy_ready',
+                                           self._handle_server_ready)
+
     def _register_endpoints(self):
         self.server.register_endpoint(
             "/spool_manager/spool", ['GET', 'POST', 'DELETE'],
@@ -237,16 +245,29 @@ class SpoolManagerHandler:
             "/spool_manager/materials", ['GET'],
             self._handle_materials_list)
 
-    async def _handle_history_changed(self, data: {}):
-        action = data['action']
+    async def _handle_server_ready(self):
+        self.server.register_event_handler(
+            'server:status_update', self._handle_status_update)
+        result = await self.klippy_apis.subscribe_objects('toolhead.position')
+        if self._e_position_from_status(result):
+            logging.info("Spool manager handler subscribed to epos")
+        else:
+            logging.error("Spool manager unable to subscribe to epos")
+            # TODO remove/disable component?
 
-        if action == 'finished':
-            job_data = data['job']
-            job_id = job_data['job_id']
-            filament_used = job_data['filament_used']
-            self.spool_manager.track_filament_usage(job_id, filament_used)
+    def _e_position_from_status(self, status: Dict[str, Any]):
+        position = status.get('toolhead', {}).get('position', [])
+        return position[3] if len(position) > 0 else None
+
+    def _handle_status_update(self,  status: Dict[str, Any]) -> None:
+        epos = self._e_position_from_status(status)
+        if epos and epos > self.lastEpos:
+            self.extruded = epos - self.lastEpos
+            self.lastEpos = epos
+            logging.debug("epos updated to %s", self.lastEpos)
 
     async def _handle_spool_request(self, web_request: WebRequest):
+        self.spool_manager.track_filament_usage()
         action = web_request.get_action()
 
         if action == 'GET':
@@ -268,12 +289,14 @@ class SpoolManagerHandler:
             return 'OK'
 
     async def _handle_spools_list(self, web_request: WebRequest):
+        self.spool_manager.track_filament_usage()
         show_inactive = web_request.get_boolean('show_inactive', False)
         spools = self.spool_manager.find_all_spools(show_inactive)
 
         return {'spools': spools}
 
     async def _handle_active_spool(self, web_request: WebRequest):
+        self.spool_manager.track_filament_usage()
         action = web_request.get_action()
 
         if action == 'GET':
