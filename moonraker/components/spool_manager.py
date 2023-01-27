@@ -131,8 +131,6 @@ class SpoolManager:
         spool_id = f"{next_spool_id:06X}"
 
         self.db[spool_id] = spool.serialize()
-        self.server.send_event('spool_manager:new_spool_added',
-                               {'spool_id': spool_id})
         logging.info(f'New spool added, id: {spool_id}')
 
         return spool_id
@@ -146,8 +144,6 @@ class SpoolManager:
                 f"Missing spool attributes: {missing_attrs}", 400)
 
         self.db[spool_id] = spool.serialize()
-        self.server.send_event('spool_manager:spool_updated',
-                               {'spool_id': spool_id})
         logging.info(f'Spool id: {spool_id} updated.')
 
         return
