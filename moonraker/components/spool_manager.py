@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from database import NamespaceWrapper
     from moonraker.websockets import WebRequest
 
-
 SPOOL_NAMESPACE = "spool_manager"
 MOONRAKER_NAMESPACE = "moonraker"
 ACTIVE_SPOOL_KEY = "spool_manager.active_spool_id"
@@ -90,8 +89,8 @@ class SpoolManager:
 
     def _parse_materials_cfg(self, config):
         materials_cfg = config.get('materials', '').strip()
-        lines = [l.strip().split(',') for l in materials_cfg.split('\n') if
-                 l.strip()]
+        lines = [line.strip().split(',') for
+                 line in materials_cfg.split('\n') if line.strip()]
         return {f.strip(): {'density': d.strip()} for f, d in lines}
 
     def find_spool(self, spool_id: str) -> Optional[Spool]:
@@ -189,7 +188,7 @@ class SpoolManager:
 
             used_cost = 0
             if spool.cost and used_weight and spool.total_weight:
-                used_cost = used_weight/spool.total_weight*spool.cost
+                used_cost = used_weight / spool.total_weight * spool.cost
 
             if not spool.first_used:
                 spool.first_used = time.time()
@@ -259,7 +258,7 @@ class SpoolManagerHandler:
         position = status.get('toolhead', {}).get('position', [])
         return position[3] if len(position) > 0 else None
 
-    def _handle_status_update(self,  status: Dict[str, Any]) -> None:
+    def _handle_status_update(self, status: Dict[str, Any]) -> None:
         epos = self._e_position_from_status(status)
         if epos and epos > self.lastEpos:
             self.extruded = epos - self.lastEpos
