@@ -60,6 +60,9 @@ klippy_uds_address: /tmp/klippy_uds
 #   Default is /tmp/klippy_uds.
 max_upload_size: 1024
 #   The maximum size allowed for a file upload (in MiB).  Default is 1024 MiB.
+max_websocket_connections:
+#   The maximum number of concurrently open websocket connections.
+#   The default is 50.
 enable_debug_logging: False
 #   ***DEPRECATED***
 #   Verbose logging is enabled by the '-v' command line option.
@@ -162,6 +165,25 @@ supervisord_config_path:
 
     Alternatively it may be possible to enable the `systemd-logind` service,
     consult with your distributions's documentation.
+
+#### Allowed Services
+
+The `machine` component uses the configured provider to manage services
+on the system (ie: restart a service).  Moonraker is authorized to manage
+the `moonraker` and `klipper` services, including those that match common
+multi-instance patterns, such as `moonraker-1`, `klipper_2`, and `moonraker1`.
+
+Moonraker may be authorized to manage additional services by modifying
+`<data_folder>/moonraker.asvc`.  By default this file includes the
+following services:
+
+- `klipper_mcu`
+- `webcamd`
+- `MoonCord`
+- `KlipperScreen`
+- `moonraker-telegam-bot`
+- `sonar`
+- `crowsnest`
 
 #### Reboot / Shutdown from Klipper
 
@@ -313,11 +335,18 @@ authorization module.
 # moonraker.conf
 
 [authorization]
+enable_api_key: True
+#   Enables API Key authentication.  The default is True.
 login_timeout:
 #   The time, in days, after which a user is forced to re-enter their
 #   credentials to log in.  This period begins when a logged out user
 #   first logs in.  Successive logins without logging out will not
 #   renew the timeout.  The default is 90 days.
+max_login_attempts:
+#   Maximum number of consecutive failed login attempts before an IP address
+#   is locked out.  Failed logins are tracked per IP and are reset upon a
+#   successful login.  Locked out IPs are reset when Moonraker restarts.
+#   By default there is no maximum number of logins.
 trusted_clients:
  192.168.1.30
  192.168.1.0/24
@@ -579,21 +608,18 @@ restart_klipper_when_powered: False
 restart_delay: 1.
 #   If "restart_klipper_when_powered" is set, this option specifies the amount
 #   of time (in seconds) to delay the restart.  Default is 1 second.
-bound_service:
-#   Can be set to any service Moonraker is authorized to manage with the
-#   exception of the moonraker service itself. See the tip below this section
-#   for details on what services are authorized.  When a bound service has
-#   been set the service will be started when the device powers on and stopped
-#   when the device powers off.  The default is no service is bound to the
-#   device.
+bound_services:
+#   A newline separated list of services that are "bound" to the state of this
+#   device.  When the device is powered on all bound services will be started.
+#   When the device is powered off all bound services are stopped.
+#
+#   The items in this list are limited to those specified in the allow list,
+#   see the [machine] configuration documentation for details.  Additionally,
+#   the Moonraker service can not be bound to a power device.  Note that
+#   service names are case sensitive.
+#
+#   The default is no services are bound to the device.
 ```
-
-!!! Tip
-    Moonraker is authorized to manage the `klipper`, `klipper_mcu`,
-    `webcamd`, `MoonCord`, `KlipperScreen`, and `moonraker-telegram-bot`
-    services.  It can also manage multiple instances of a service, ie:
-    `klipper_1`, `klipper_2`.  Keep in mind that service names are case
-    sensitive.
 
 !!! Note
     If a device has been bound to the `klipper` service and the
@@ -1594,8 +1620,10 @@ instance_name:
 #   The default is the machine's hostname.
 status_objects:
 #   A newline separated list of Klipper objects whose state will be
-#   published in the payload of the following topic:
-#      {instance_name}/klipper/status
+#   published.  There are two different ways to publish the states - you
+#   can use either or both depending on your need.  See the 
+#   "publish_split_status" options for details.
+#
 #   For example, this option could be set as follows:
 #
 #     status_objects:
@@ -1616,6 +1644,23 @@ status_objects:
 #
 #   If not configured then no objects will be tracked and published to
 #   the klipper/status topic.
+publish_split_status: False
+#   Configures how to publish status updates to MQTT.  
+#
+#   When set to False (default), all Klipper object state updates will be
+#   published to a single mqtt state with the following topic:
+#     {instance_name}/klipper/status
+#
+#   When set to True, all Klipper object state updates will be published to
+#   separate mqtt topics derived from the object and item in the following
+#   format:
+#     {instance_name}/klipper/state/{objectname}/{statename}
+#
+#   The actual value of the state is published as "value" to the topic above.
+#   For example, if the heater_bed temperature was 24.0, this is the payload:
+#     {"eventtime": {timestamp}, "value": 24.0}
+#   It would be published to this topic:
+#     {instance_name}/klipper/state/heater_bed/temperature
 default_qos: 0
 #   The default QOS level used when publishing or subscribing to topics.
 #   Must be an integer value from 0 to 2.  The default is 0.
@@ -1920,18 +1965,18 @@ separate from `moonraker.conf`.  This allows users to safely distribute
 their configuration and log files without revealing credentials and
 other sensitive information.
 
-!!! Note:
-    This section no long has configuration options.  Previously the
+!!! Note
+    This section no longer has configuration options.  Previously the
     `secrets_path` option was used to specify the location of the file.
     The secrets file name and location is now determined by the `data path`
-    and `alias` command line options, ie: `<data_base_path>/<alias>.secrets`.
-    By default this resolves to `$HOME/moonraker_data/moonraker.secrets`.
-    This may be a symbolic link.
+    and `alias` command line options, ie: `<data_base_path>/moonraker.secrets`.
+    For a typical single instance installation this resolves to
+    `$HOME/printer_data/moonraker.secrets`. This may be a symbolic link.
 
 Example ini secrets file:
 
 ```ini
-# moonraker_secrets.ini
+# /home/pi/printer_data/moonraker.secrets
 
 [mqtt_credentials]
 username: mqtt_user

@@ -9,6 +9,7 @@ import logging
 import ipaddress
 import json
 import asyncio
+import copy
 from tornado.websocket import WebSocketHandler, WebSocketClosedError
 from utils import ServerError, SentinelClass
 
@@ -80,8 +81,13 @@ class WebRequest:
     def get_args(self) -> Dict[str, Any]:
         return self.args
 
-    def get_connection(self) -> Optional[Subscribable]:
+    def get_subscribable(self) -> Optional[Subscribable]:
         return self.conn
+
+    def get_client_connection(self) -> Optional[BaseSocketClient]:
+        if isinstance(self.conn, BaseSocketClient):
+            return self.conn
+        return None
 
     def get_ip_address(self) -> Optional[IPUnion]:
         return self.ip_addr
@@ -149,9 +155,48 @@ class WebRequest:
         return self._get_converted_arg(key, default, bool)
 
 class JsonRPC:
-    def __init__(self, transport: str = "Websocket") -> None:
+    def __init__(
+        self, server: Server, transport: str = "Websocket"
+    ) -> None:
         self.methods: Dict[str, RPCCallback] = {}
         self.transport = transport
+        self.sanitize_response = False
+        self.verbose = server.is_verbose_enabled()
+
+    def _log_request(self, rpc_obj: Dict[str, Any], ) -> None:
+        if not self.verbose:
+            return
+        self.sanitize_response = False
+        output = rpc_obj
+        method: Optional[str] = rpc_obj.get("method")
+        params: Dict[str, Any] = rpc_obj.get("params", {})
+        if isinstance(method, str):
+            if (
+                method.startswith("access.") or
+                method == "machine.sudo.password"
+            ):
+                self.sanitize_response = True
+                if params and isinstance(params, dict):
+                    output = copy.deepcopy(rpc_obj)
+                    output["params"] = {key: "<sanitized>" for key in params}
+            elif method == "server.connection.identify":
+                output = copy.deepcopy(rpc_obj)
+                for field in ["access_token", "api_key"]:
+                    if field in params:
+                        output["params"][field] = "<sanitized>"
+        logging.debug(f"{self.transport} Received::{json.dumps(output)}")
+
+    def _log_response(self, resp_obj: Optional[Dict[str, Any]]) -> None:
+        if not self.verbose:
+            return
+        if resp_obj is None:
+            return
+        output = resp_obj
+        if self.sanitize_response and "result" in resp_obj:
+            output = copy.deepcopy(resp_obj)
+            output["result"] = "<sanitized>"
+        self.sanitize_response = False
+        logging.debug(f"{self.transport} Response::{json.dumps(output)}")
 
     def register_method(self,
                         name: str,
@@ -166,29 +211,30 @@ class JsonRPC:
                        data: str,
                        conn: Optional[BaseSocketClient] = None
                        ) -> Optional[str]:
-        response: Any = None
         try:
             obj: Union[Dict[str, Any], List[dict]] = json.loads(data)
         except Exception:
             msg = f"{self.transport} data not json: {data}"
             logging.exception(msg)
-            response = self.build_error(-32700, "Parse error")
-            return json.dumps(response)
-        logging.debug(f"{self.transport} Received::{data}")
+            err = self.build_error(-32700, "Parse error")
+            return json.dumps(err)
         if isinstance(obj, list):
-            response = []
+            responses: List[Dict[str, Any]] = []
             for item in obj:
+                self._log_request(item)
                 resp = await self.process_object(item, conn)
                 if resp is not None:
-                    response.append(resp)
-            if not response:
-                response = None
+                    self._log_response(resp)
+                    responses.append(resp)
+            if responses:
+                return json.dumps(responses)
         else:
+            self._log_request(obj)
             response = await self.process_object(obj, conn)
-        if response is not None:
-            response = json.dumps(response)
-            logging.debug(f"{self.transport} Response::{response}")
-        return response
+            if response is not None:
+                self._log_response(response)
+                return json.dumps(response)
+        return None
 
     async def process_object(self,
                              obj: Dict[str, Any],
@@ -258,6 +304,8 @@ class JsonRPC:
             code = e.status_code
             if code == 404:
                 code = -32601
+            elif code == 401:
+                code = -32602
             return self.build_error(code, str(e), req_id, True)
         except Exception as e:
             return self.build_error(-31000, str(e), req_id, True)
@@ -303,62 +351,64 @@ class WebsocketManager(APITransport):
         self.server = server
         self.klippy: Klippy = server.lookup_component("klippy_connection")
         self.clients: Dict[int, BaseSocketClient] = {}
-        self.rpc = JsonRPC()
+        self.rpc = JsonRPC(server)
         self.closed_event: Optional[asyncio.Event] = None
 
         self.rpc.register_method("server.websocket.id", self._handle_id_request)
         self.rpc.register_method(
             "server.connection.identify", self._handle_identify)
 
-    def register_notification(self,
-                              event_name: str,
-                              notify_name: Optional[str] = None
-                              ) -> None:
+    def register_notification(
+        self,
+        event_name: str,
+        notify_name: Optional[str] = None,
+        event_type: Optional[str] = None
+    ) -> None:
         if notify_name is None:
             notify_name = event_name.split(':')[-1]
-
-        def notify_handler(*args):
-            self.notify_clients(notify_name, args)
-        self.server.register_event_handler(
-            event_name, notify_handler)
+        if event_type == "logout":
+            def notify_handler(*args):
+                self.notify_clients(notify_name, args)
+                self._process_logout(*args)
+        else:
+            def notify_handler(*args):
+                self.notify_clients(notify_name, args)
+        self.server.register_event_handler(event_name, notify_handler)
 
     def register_api_handler(self, api_def: APIDefinition) -> None:
         if api_def.callback is None:
             # Remote API, uses RPC to reach out to Klippy
             ws_method = api_def.jrpc_methods[0]
-            rpc_cb = self._generate_callback(api_def.endpoint)
+            rpc_cb = self._generate_callback(
+                api_def.endpoint, "", self.klippy.request
+            )
             self.rpc.register_method(ws_method, rpc_cb)
         else:
             # Local API, uses local callback
             for ws_method, req_method in \
                     zip(api_def.jrpc_methods, api_def.request_methods):
-                rpc_cb = self._generate_local_callback(
-                    api_def.endpoint, req_method, api_def.callback)
+                rpc_cb = self._generate_callback(
+                    api_def.endpoint, req_method, api_def.callback
+                )
                 self.rpc.register_method(ws_method, rpc_cb)
         logging.info(
             "Registering Websocket JSON-RPC methods: "
-            f"{', '.join(api_def.jrpc_methods)}")
+            f"{', '.join(api_def.jrpc_methods)}"
+        )
 
     def remove_api_handler(self, api_def: APIDefinition) -> None:
         for jrpc_method in api_def.jrpc_methods:
             self.rpc.remove_method(jrpc_method)
 
-    def _generate_callback(self, endpoint: str) -> RPCCallback:
+    def _generate_callback(
+        self,
+        endpoint: str,
+        request_method: str,
+        callback: Callable[[WebRequest], Coroutine]
+    ) -> RPCCallback:
         async def func(args: Dict[str, Any]) -> Any:
             sc: BaseSocketClient = args.pop("_socket_")
-            result = await self.klippy.request(
-                WebRequest(endpoint, args, conn=sc, ip_addr=sc.ip_addr,
-                           user=sc.user_info))
-            return result
-        return func
-
-    def _generate_local_callback(self,
-                                 endpoint: str,
-                                 request_method: str,
-                                 callback: Callable[[WebRequest], Coroutine]
-                                 ) -> RPCCallback:
-        async def func(args: Dict[str, Any]) -> Any:
-            sc: BaseSocketClient = args.pop("_socket_")
+            sc.check_authenticated(path=endpoint)
             result = await callback(
                 WebRequest(endpoint, args, request_method, sc,
                            ip_addr=sc.ip_addr, user=sc.user_info))
@@ -367,10 +417,15 @@ class WebsocketManager(APITransport):
 
     async def _handle_id_request(self, args: Dict[str, Any]) -> Dict[str, int]:
         sc: BaseSocketClient = args["_socket_"]
+        sc.check_authenticated()
         return {'websocket_id': sc.uid}
 
     async def _handle_identify(self, args: Dict[str, Any]) -> Dict[str, int]:
         sc: BaseSocketClient = args["_socket_"]
+        sc.authenticate(
+            token=args.get("access_token", None),
+            api_key=args.get("api_key", None)
+        )
         if sc.identified:
             raise self.server.error(
                 f"Connection already identified: {sc.client_data}"
@@ -407,6 +462,13 @@ class WebsocketManager(APITransport):
         )
         self.server.send_event("websockets:client_identified", sc)
         return {'connection_id': sc.uid}
+
+    def _process_logout(self, user: Dict[str, Any]) -> None:
+        if "username" not in user:
+            return
+        name = user["username"]
+        for sc in self.clients.values():
+            sc.on_user_logout(name)
 
     def has_socket(self, ws_id: int) -> bool:
         return ws_id in self.clients
@@ -468,7 +530,7 @@ class WebsocketManager(APITransport):
         if data:
             msg['params'] = data
         for sc in list(self.clients.values()):
-            if sc.uid in mask:
+            if sc.uid in mask or sc.need_auth:
                 continue
             sc.queue_message(msg)
 
@@ -507,10 +569,21 @@ class BaseSocketClient(Subscribable):
             "type": "",
             "url": ""
         }
+        self._need_auth: bool = False
+        self._user_info: Optional[Dict[str, Any]] = None
 
     @property
     def user_info(self) -> Optional[Dict[str, Any]]:
-        return None
+        return self._user_info
+
+    @user_info.setter
+    def user_info(self, uinfo: Dict[str, Any]) -> None:
+        self._user_info = uinfo
+        self._need_auth = False
+
+    @property
+    def need_auth(self) -> bool:
+        return self._need_auth
 
     @property
     def uid(self) -> int:
@@ -551,6 +624,38 @@ class BaseSocketClient(Subscribable):
             return
         self.queue_busy = True
         self.eventloop.register_callback(self._write_messages)
+
+    def authenticate(
+        self,
+        token: Optional[str] = None,
+        api_key: Optional[str] = None
+    ) -> None:
+        auth: AuthComp = self.server.lookup_component("authorization", None)
+        if auth is None:
+            return
+        if token is not None:
+            self.user_info = auth.validate_jwt(token)
+        elif api_key is not None and self.user_info is None:
+            self.user_info = auth.validate_api_key(api_key)
+        else:
+            self.check_authenticated()
+
+    def check_authenticated(self, path: str = "") -> None:
+        if not self._need_auth:
+            return
+        auth: AuthComp = self.server.lookup_component("authorization", None)
+        if auth is None:
+            return
+        if not auth.is_path_permitted(path):
+            raise self.server.error("Unauthorized", 401)
+
+    def on_user_logout(self, user: str) -> bool:
+        if self._user_info is None:
+            return False
+        if user == self._user_info.get("username", ""):
+            self._user_info = None
+            return True
+        return False
 
     async def _write_messages(self):
         if self.is_closed:
@@ -614,20 +719,22 @@ class BaseSocketClient(Subscribable):
         raise NotImplementedError("Children must implement close_socket()")
 
 class WebSocket(WebSocketHandler, BaseSocketClient):
+    connection_count: int = 0
+
     def initialize(self) -> None:
         self.on_create(self.settings['server'])
         self.ip_addr: str = self.request.remote_ip or ""
         self.last_pong_time: float = self.eventloop.get_loop_time()
 
     @property
-    def user_info(self) -> Optional[Dict[str, Any]]:
-        return self.current_user
-
-    @property
     def hostname(self) -> str:
         return self.request.host_name
 
+    def get_current_user(self) -> Any:
+        return self._user_info
+
     def open(self, *args, **kwargs) -> None:
+        self.__class__.connection_count += 1
         self.set_nodelay(True)
         self._connected_time = self.eventloop.get_loop_time()
         agent = self.request.headers.get("User-Agent", "")
@@ -651,6 +758,7 @@ class WebSocket(WebSocketHandler, BaseSocketClient):
 
     def on_close(self) -> None:
         self.is_closed = True
+        self.__class__.connection_count -= 1
         self.message_buf = []
         now = self.eventloop.get_loop_time()
         pong_elapsed = now - self.last_pong_time
@@ -689,11 +797,27 @@ class WebSocket(WebSocketHandler, BaseSocketClient):
             return False
         return True
 
+    def on_user_logout(self, user: str) -> bool:
+        if super().on_user_logout(user):
+            self._need_auth = True
+            return True
+        return False
+
     # Check Authorized User
-    def prepare(self):
+    def prepare(self) -> None:
+        max_conns = self.settings["max_websocket_connections"]
+        if self.__class__.connection_count >= max_conns:
+            raise self.server.error(
+                "Maximum Number of Websocket Connections Reached"
+            )
         auth: AuthComp = self.server.lookup_component('authorization', None)
         if auth is not None:
-            self.current_user = auth.check_authorized(self.request)
+            try:
+                self._user_info = auth.check_authorized(self.request)
+            except Exception as e:
+                logging.info(f"Websocket Failed Authentication: {e}")
+                self._user_info = None
+                self._need_auth = True
 
     def close_socket(self, code: int, reason: str) -> None:
         self.close(code, reason)

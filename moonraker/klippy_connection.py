@@ -35,7 +35,16 @@ if TYPE_CHECKING:
     from components.klippy_apis import KlippyAPI
     from components.file_manager.file_manager import FileManager
     from components.machine import Machine
+    from components.job_state import JobState
     FlexCallback = Callable[..., Optional[Coroutine]]
+
+# These endpoints are reserved for klippy/moonraker communication only and are
+# not exposed via http or the websocket
+RESERVED_ENDPOINTS = [
+    "list_endpoints",
+    "gcode/subscribe_output",
+    "register_remote_method",
+]
 
 INIT_TIME = .25
 LOG_ATTEMPT_INTERVAL = int(2. / INIT_TIME + .5)
@@ -318,7 +327,8 @@ class KlippyConnection:
         endpoints = result.get('endpoints', [])
         app: MoonrakerApp = self.server.lookup_component("application")
         for ep in endpoints:
-            app.register_remote_handler(ep)
+            if ep not in RESERVED_ENDPOINTS:
+                app.register_remote_handler(ep)
 
     async def _check_ready(self) -> None:
         send_id = "identified" not in self.init_list
@@ -484,7 +494,7 @@ class KlippyConnection:
                                    web_request: WebRequest
                                    ) -> Dict[str, Any]:
         args = web_request.get_args()
-        conn = web_request.get_connection()
+        conn = web_request.get_subscribable()
 
         # Build the subscription request from a superset of all client
         # subscriptions
@@ -540,6 +550,47 @@ class KlippyConnection:
 
     def is_connected(self) -> bool:
         return self.writer is not None and not self.closing
+
+    def is_ready(self) -> bool:
+        return self._state == "ready"
+
+    def is_printing(self) -> bool:
+        if not self.is_ready():
+            return False
+        job_state: JobState = self.server.lookup_component("job_state")
+        stats = job_state.get_last_stats()
+        return stats.get("state", "") == "printing"
+
+    async def rollover_log(self) -> None:
+        if "unit_name" not in self._service_info:
+            raise self.server.error(
+                "Unable to detect Klipper Service, cannot perform "
+                "manual rollover"
+            )
+        logfile: Optional[str] = self._klippy_info.get("log_file", None)
+        if logfile is None:
+            raise self.server.error(
+                "Unable to detect path to Klipper log file"
+            )
+        if self.is_printing():
+            raise self.server.error("Cannot rollover log while printing")
+        logpath = pathlib.Path(logfile).expanduser().resolve()
+        if not logpath.is_file():
+            raise self.server.error(
+                f"No file at {logpath} exists, cannot perform rollover"
+            )
+        machine: Machine = self.server.lookup_component("machine")
+        await machine.do_service_action("stop", self.unit_name)
+        suffix = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+        new_path = pathlib.Path(f"{logpath}.{suffix}")
+
+        def _do_file_op() -> None:
+            if new_path.exists():
+                new_path.unlink()
+            logpath.rename(new_path)
+
+        await self.event_loop.run_in_thread(_do_file_op)
+        await machine.do_service_action("start", self.unit_name)
 
     async def _on_connection_closed(self) -> None:
         self.init_list = []

@@ -13,6 +13,8 @@ import logging
 import json
 import tempfile
 import asyncio
+import zipfile
+import time
 from copy import deepcopy
 from inotify_simple import INotify
 from inotify_simple import flags as iFlags
@@ -38,10 +40,12 @@ if TYPE_CHECKING:
     from inotify_simple import Event as InotifyEvent
     from confighelper import ConfigHelper
     from websockets import WebRequest
+    from klippy_connection import KlippyConnection
     from components import database
     from components import klippy_apis
     from components import shell_command
     from components.job_queue import JobQueue
+    from components.job_state import JobState
     StrOrPath = Union[str, pathlib.Path]
     DBComp = database.MoonrakerDatabase
     APIComp = klippy_apis.KlippyAPI
@@ -95,6 +99,8 @@ class FileManager:
             "/server/files/move", ['POST'], self._handle_file_move_copy)
         self.server.register_endpoint(
             "/server/files/copy", ['POST'], self._handle_file_move_copy)
+        self.server.register_endpoint(
+            "/server/files/zip", ['POST'], self._handle_zip_files)
         self.server.register_endpoint(
             "/server/files/delete_file", ['DELETE'], self._handle_file_delete,
             transports=["websocket"])
@@ -269,6 +275,10 @@ class FileManager:
             req_path = pathlib.Path(req_path)
         req_path = req_path.expanduser().resolve()
         if ".git" in req_path.parts:
+            if raise_error:
+                raise self.server.error(
+                    "Access to .git folders is forbidden", 403
+                )
             return True
         for name, (res_path, can_read) in self.reserved_paths.items():
             if (
@@ -324,7 +334,7 @@ class FileManager:
         for registered in self.file_paths.values():
             reg_root_path = pathlib.Path(registered).resolve()
             if reg_root_path in path.parents:
-                return True
+                return not self.check_reserved_path(path, False, False)
         return False
 
     def upload_queue_enabled(self) -> bool:
@@ -403,7 +413,7 @@ class FileManager:
                 if force:
                     # Make sure that the directory does not contain a file
                     # loaded by the virtual_sdcard
-                    await self._handle_operation_check(dir_path)
+                    self._handle_operation_check(dir_path)
                     self.notify_sync_lock = NotifySyncLock(dir_path)
                     try:
                         await self.event_loop.run_in_thread(
@@ -423,20 +433,19 @@ class FileManager:
                 raise self.server.error("Operation Not Supported", 405)
         return result
 
-    async def _handle_operation_check(self, requested_path: str) -> bool:
+    def _handle_operation_check(self, requested_path: str) -> bool:
         if not self.get_relative_path("gcodes", requested_path):
             # Path not in the gcodes path
             return True
-        # Get virtual_sdcard status
-        kapis: APIComp = self.server.lookup_component('klippy_apis')
-        result: Dict[str, Any]
-        result = await kapis.query_objects({'print_stats': None}, {})
-        pstats = result.get('print_stats', {})
-        loaded_file: str = pstats.get('filename', "")
-        state: str = pstats.get('state', "")
+        kconn: KlippyConnection
+        kconn = self.server.lookup_component("klippy_connection")
+        job_state: JobState = self.server.lookup_component("job_state")
+        last_stats = job_state.get_last_stats()
+        loaded_file: str = last_stats.get('filename', "")
+        state: str = last_stats.get('state', "")
         gc_path = self.file_paths.get('gcodes', "")
         full_path = os.path.join(gc_path, loaded_file)
-        is_printing = state in ["printing", "paused"]
+        is_printing = kconn.is_ready() and state in ["printing", "paused"]
         if loaded_file and is_printing:
             if os.path.isdir(requested_path):
                 # Check to see of the loaded file is in the request
@@ -482,13 +491,13 @@ class FileManager:
                 raise self.server.error(f"File {source_path} does not exist")
             # make sure the destination is not in use
             if os.path.exists(dest_path):
-                await self._handle_operation_check(dest_path)
+                self._handle_operation_check(dest_path)
             if ep == "/server/files/move":
                 if source_root not in self.full_access_roots:
                     raise self.server.error(
                         f"Source path is read-only, cannot move: {source_root}")
                 # if moving the file, make sure the source is not in use
-                await self._handle_operation_check(source_path)
+                self._handle_operation_check(source_path)
                 op_func: Callable[..., str] = shutil.move
                 result['source_item'] = {
                     'path': source,
@@ -516,6 +525,102 @@ class FileManager:
             self.notify_sync_lock = None
         result['item']['path'] = self.get_relative_path(dest_root, full_dest)
         return result
+
+    async def _handle_zip_files(
+        self, web_request: WebRequest
+    ) -> Dict[str, Any]:
+        async with self.write_mutex:
+            store_only = web_request.get_boolean("store_only", False)
+            suffix = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+            dest: str = web_request.get_str(
+                "dest", f"config/collection-{suffix}.zip"
+            )
+            dest_root, dest_str_path = self._convert_request_path(dest)
+            if dest_root not in self.full_access_roots:
+                raise self.server.error(
+                    f"Destination Root '{dest_root}' is read-only"
+                )
+            dest_path = pathlib.Path(dest_str_path)
+            self.check_reserved_path(dest_path, True)
+            if dest_path.is_dir():
+                raise self.server.error(
+                    f"Cannot create archive at '{dest_path}'.  Path exists "
+                    "as a directory."
+                )
+            elif not dest_path.parent.exists():
+                raise self.server.error(
+                    f"Cannot create archive at '{dest_path}'.  Parent "
+                    "directory does not exist."
+                )
+            items: Union[str, List[str]] = web_request.get("items")
+            if isinstance(items, str):
+                items = [
+                    item.strip() for item in items.split(",") if item.strip()
+                ]
+            if not items:
+                raise self.server.error(
+                    "At least one file or directory must be specified"
+                )
+            await self.event_loop.run_in_thread(
+                self._zip_files, items, dest_path, store_only
+            )
+        rel_dest = dest_path.relative_to(self.file_paths[dest_root])
+        return {
+            "destination": {"root": dest_root, "path": str(rel_dest)},
+            "action": "zip_files"
+        }
+
+    def _zip_files(
+        self,
+        item_list: List[str],
+        destination: StrOrPath,
+        store_only: bool = False
+    ) -> None:
+        if isinstance(destination, str):
+            destination = pathlib.Path(destination).expanduser().resolve()
+        tmpdir = pathlib.Path(tempfile.gettempdir())
+        temp_dest = tmpdir.joinpath(destination.name)
+        processed: Set[Tuple[int, int]] = set()
+        cptype = zipfile.ZIP_STORED if store_only else zipfile.ZIP_DEFLATED
+        with zipfile.ZipFile(str(temp_dest), "w", compression=cptype) as zf:
+            for item in item_list:
+                root, str_path = self._convert_request_path(item)
+                root_path = pathlib.Path(self.file_paths[root])
+                item_path = pathlib.Path(str_path)
+                self.check_reserved_path(item_path, False)
+                if not item_path.exists():
+                    raise self.server.error(
+                        f"No file/directory exits at '{item}'"
+                    )
+                if item_path.is_file():
+                    st = item_path.stat()
+                    ident = (st.st_dev, st.st_ino)
+                    if ident in processed:
+                        continue
+                    processed.add(ident)
+                    rel_path = item_path.relative_to(root_path.parent)
+                    zf.write(str(item_path), arcname=str(rel_path))
+                    continue
+                elif not item_path.is_dir():
+                    raise self.server.error(
+                        f"Item at path '{item}' is not a valid file or "
+                        "directory"
+                    )
+                for child_path in item_path.iterdir():
+                    if child_path.is_file():
+                        if self.check_reserved_path(child_path, False, False):
+                            continue
+                        st = child_path.stat()
+                        ident = (st.st_dev, st.st_ino)
+                        if ident in processed:
+                            continue
+                        processed.add(ident)
+                        rel_path = child_path.relative_to(root_path.parent)
+                        try:
+                            zf.write(str(child_path), arcname=str(rel_path))
+                        except PermissionError:
+                            continue
+        shutil.move(str(temp_dest), str(destination))
 
     def _list_directory(self,
                         path: str,
@@ -665,7 +770,7 @@ class FileManager:
         can_start: bool = False
         try:
             check_path: str = upload_info['dest_path']
-            can_start = await self._handle_operation_check(check_path)
+            can_start = self._handle_operation_check(check_path)
         except self.server.error as e:
             if e.status_code == 403:
                 raise self.server.error(
@@ -857,7 +962,7 @@ class FileManager:
             if not os.path.isfile(full_path):
                 raise self.server.error(f"Invalid file path: {path}")
             try:
-                await self._handle_operation_check(full_path)
+                self._handle_operation_check(full_path)
             except self.server.error as e:
                 if e.status_code == 403:
                     raise
@@ -1683,7 +1788,7 @@ class MetadataStorage:
 
     def get(self,
             key: str,
-            default: _T = None
+            default: Optional[_T] = None
             ) -> Union[_T, Dict[str, Any]]:
         return deepcopy(self.metadata.get(key, default))
 
