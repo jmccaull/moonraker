@@ -283,7 +283,8 @@ class SpoolManagerHandler:
             spool_id = web_request.get('id', None)
 
             if spool_id:
-                await self.spool_manager.update_spool(spool_id, web_request.args)
+                await self.spool_manager.update_spool(spool_id,
+                                                      web_request.args)
                 return 'OK'
             else:
                 spool_id = self.spool_manager.add_spool(web_request.args)
