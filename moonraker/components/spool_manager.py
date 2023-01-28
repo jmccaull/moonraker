@@ -7,12 +7,15 @@ from __future__ import annotations
 import logging
 import time
 import math
-from typing import TYPE_CHECKING, Dict, Any
+from typing import TYPE_CHECKING, Dict, Any, List
+
+from moonraker.components import klippy_apis
 
 if TYPE_CHECKING:
-    from typing import Set, Optional, List
+    from typing import Set, Optional
     from database import NamespaceWrapper
     from moonraker.websockets import WebRequest
+    APIComp = klippy_apis.KlippyAPI
 
 SPOOL_NAMESPACE = "spool_manager"
 MOONRAKER_NAMESPACE = "moonraker"
@@ -26,7 +29,7 @@ class Validation:
                         self._required_attributes)
         return set(failed)
 
-    _required_attributes: Set[str] = {}
+    _required_attributes: Set[str] = []
 
 
 class Spool(Validation):
@@ -95,8 +98,9 @@ class SpoolManager:
                  line in materials_cfg.split('\n') if line.strip()]
         return {f.strip(): {'density': d.strip()} for f, d in lines}
 
-    def find_spool(self, spool_id: str) -> Optional[Spool]:
-        spool = self.db.get(spool_id, None)
+    async def find_spool(self, spool_id: str) -> Optional[Spool]:
+        # TODO is this correct?
+        spool = await self.db.get(spool_id, None)
 
         if spool:
             return Spool(spool)
@@ -115,11 +119,11 @@ class SpoolManager:
         else:
             return False
 
-    def get_active_spool_id(self) -> str:
-        return self.moonraker_db.get(ACTIVE_SPOOL_KEY, None)
+    async def get_active_spool_id(self) -> str:
+        return await self.moonraker_db.get(ACTIVE_SPOOL_KEY, None)
 
-    def add_spool(self, data: {}) -> str:
-        if len(self.db) >= MAX_SPOOLS:
+    async def add_spool(self, data: {}) -> str:
+        if await self.db.length() >= MAX_SPOOLS:
             raise self.server.error(
                 f"Reached maximum number of spools: {MAX_SPOOLS}", 400)
 
@@ -130,7 +134,7 @@ class SpoolManager:
                 f"Missing spool attributes: {missing_attrs}", 400)
 
         next_spool_id = 0
-        spools = self.db.keys()
+        spools = await self.db.keys()
         if spools:
             next_spool_id = int(spools[-1], 16) + 1
         spool_id = f"{next_spool_id:06X}"
@@ -140,10 +144,9 @@ class SpoolManager:
 
         return spool_id
 
-    def update_spool(self, spool_id: str, data: {}) -> None:
-        spool = self.find_spool(spool_id)
+    async def update_spool(self, spool_id: str, data: {}) -> None:
+        spool = await self.find_spool(spool_id)
         if spool:
-            spool: Spool = spool
             spool.update(data)
             missing_attrs = spool.validate()
             if missing_attrs:
@@ -170,9 +173,9 @@ class SpoolManager:
 
         return dict(spools)
 
-    def track_filament_usage(self):
-        spool_id = self.get_active_spool_id()
-        spool = self.find_spool(spool_id)
+    async def track_filament_usage(self):
+        spool_id = await self.get_active_spool_id()
+        spool = await self.find_spool(spool_id)
 
         if spool and self.handler.extruded > 0:
             used_length = self.handler.extruded
@@ -196,7 +199,7 @@ class SpoolManager:
 
             spool.last_used = time.time()
 
-            self.update_spool(spool_id, spool.serialize())
+            await self.update_spool(spool_id, spool.serialize())
 
             metadata = {'spool_id': spool_id,
                         'used_weight': used_weight,
@@ -227,6 +230,7 @@ class SpoolManagerHandler:
 
         self._register_listeners()
         self._register_endpoints()
+        self.klippy_apis: APIComp = self.server.lookup_component('klippy_apis')
 
     def _register_listeners(self):
         self.server.register_event_handler('server:klippy_ready',
@@ -248,7 +252,8 @@ class SpoolManagerHandler:
     async def _handle_server_ready(self):
         self.server.register_event_handler(
             'server:status_update', self._handle_status_update)
-        result = await self.klippy_apis.subscribe_objects('toolhead.position')
+        sub: Dict[str, Optional[List[str]]] = {'toolhead': ['position']}
+        result = await self.klippy_apis.subscribe_objects(sub)
         if self._e_position_from_status(result):
             logging.info("Spool manager handler subscribed to epos")
         else:
@@ -267,18 +272,18 @@ class SpoolManagerHandler:
             logging.debug("epos updated to %s", self.lastEpos)
 
     async def _handle_spool_request(self, web_request: WebRequest):
-        self.spool_manager.track_filament_usage()
+        await self.spool_manager.track_filament_usage()
         action = web_request.get_action()
 
         if action == 'GET':
             spool_id = web_request.get_str('id')
-            spool = self.spool_manager.find_spool(spool_id)
+            spool = await self.spool_manager.find_spool(spool_id)
             return {'spool': spool.serialize(include_calculated=True)}
         elif action == 'POST':
             spool_id = web_request.get('id', None)
 
             if spool_id:
-                self.spool_manager.update_spool(spool_id, web_request.args)
+                await self.spool_manager.update_spool(spool_id, web_request.args)
                 return 'OK'
             else:
                 spool_id = self.spool_manager.add_spool(web_request.args)
@@ -289,14 +294,14 @@ class SpoolManagerHandler:
             return 'OK'
 
     async def _handle_spools_list(self, web_request: WebRequest):
-        self.spool_manager.track_filament_usage()
+        await self.spool_manager.track_filament_usage()
         show_inactive = web_request.get_boolean('show_inactive', False)
         spools = self.spool_manager.find_all_spools(show_inactive)
 
         return {'spools': spools}
 
     async def _handle_active_spool(self, web_request: WebRequest):
-        self.spool_manager.track_filament_usage()
+        await self.spool_manager.track_filament_usage()
         action = web_request.get_action()
 
         if action == 'GET':
@@ -310,7 +315,7 @@ class SpoolManagerHandler:
                 raise self.server.error(
                     f"Spool id {spool_id} not found", 404)
 
-    async def _handle_materials_list(self, web_request: WebRequest):
+    async def _handle_materials_list(self):
         return {'materials': self.spool_manager.materials}
 
 
