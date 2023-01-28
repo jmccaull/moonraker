@@ -9,13 +9,11 @@ import time
 import math
 from typing import TYPE_CHECKING, Dict, Any, List
 
-from moonraker.components import klippy_apis
-
 if TYPE_CHECKING:
     from typing import Set, Optional
     from database import NamespaceWrapper
     from moonraker.websockets import WebRequest
-    APIComp = klippy_apis.KlippyAPI
+    from .klippy_apis import KlippyAPI as APIComp
 
 SPOOL_NAMESPACE = "spool_manager"
 MOONRAKER_NAMESPACE = "moonraker"
@@ -29,7 +27,7 @@ class Validation:
                         self._required_attributes)
         return set(failed)
 
-    _required_attributes: Set[str] = []
+    _required_attributes: Set[str] = {"name"}
 
 
 class Spool(Validation):
@@ -107,8 +105,8 @@ class SpoolManager:
         else:
             return None
 
-    def set_active_spool(self, spool_id: str) -> bool:
-        spool = self.find_spool(spool_id)
+    async def set_active_spool(self, spool_id: str) -> bool:
+        spool = await self.find_spool(spool_id)
 
         if spool:
             self.moonraker_db[ACTIVE_SPOOL_KEY] = spool_id
@@ -278,7 +276,10 @@ class SpoolManagerHandler:
         if action == 'GET':
             spool_id = web_request.get_str('id')
             spool = await self.spool_manager.find_spool(spool_id)
-            return {'spool': spool.serialize(include_calculated=True)}
+            if spool:
+                return {'spool': spool.serialize(include_calculated=True)}
+            else:
+                return None
         elif action == 'POST':
             spool_id = web_request.get('id', None)
 
@@ -306,7 +307,7 @@ class SpoolManagerHandler:
         action = web_request.get_action()
 
         if action == 'GET':
-            spool_id = self.spool_manager.get_active_spool_id()
+            spool_id = await self.spool_manager.get_active_spool_id()
             return {"spool_id": spool_id}
         elif action == 'POST':
             spool_id = web_request.get_str('id')
