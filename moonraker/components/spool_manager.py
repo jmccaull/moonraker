@@ -26,6 +26,8 @@ class Validation:
                         self._required_attributes)
         return set(failed)
 
+    _required_attributes: Set[str] = {}
+
 
 class Spool(Validation):
     _required_attributes: Set[str] = {'name'}
@@ -140,14 +142,16 @@ class SpoolManager:
 
     def update_spool(self, spool_id: str, data: {}) -> None:
         spool = self.find_spool(spool_id)
-        spool.update(data)
-        missing_attrs = spool.validate()
-        if missing_attrs:
-            raise self.server.error(
-                f"Missing spool attributes: {missing_attrs}", 400)
+        if spool:
+            spool: Spool = spool
+            spool.update(data)
+            missing_attrs = spool.validate()
+            if missing_attrs:
+                raise self.server.error(
+                    f"Missing spool attributes: {missing_attrs}", 400)
 
-        self.db[spool_id] = spool.serialize()
-        logging.info(f'Spool id: {spool_id} updated.')
+            self.db[spool_id] = spool.serialize()
+            logging.info(f'Spool id: {spool_id} updated.')
 
         return
 
@@ -170,7 +174,7 @@ class SpoolManager:
         spool_id = self.get_active_spool_id()
         spool = self.find_spool(spool_id)
 
-        if spool:
+        if spool and self.handler.extruded > 0:
             used_length = self.handler.extruded
 
             old_used_length = spool.used_length
@@ -182,9 +186,6 @@ class SpoolManager:
             new_used_weight = spool.used_weight()
 
             used_weight = new_used_weight - old_used_weight
-
-            if 0 < spool.total_weight < new_used_weight:
-                spool.active = False
 
             used_cost = 0
             if spool.cost and used_weight and spool.total_weight:
