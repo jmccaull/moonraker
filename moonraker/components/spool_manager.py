@@ -120,7 +120,7 @@ class SpoolManager:
     async def get_active_spool_id(self) -> str:
         return await self.moonraker_db.get(ACTIVE_SPOOL_KEY, None)
 
-    async def add_spool(self, data: Dict[str, any]) -> str:
+    async def add_spool(self, data: Dict[str, Any]) -> str:
         if await self.db.length() >= MAX_SPOOLS:
             raise self.server.error(
                 f"Reached maximum number of spools: {MAX_SPOOLS}", 400)
@@ -142,7 +142,7 @@ class SpoolManager:
 
         return spool_id
 
-    async def update_spool(self, spool_id: str, data: Dict[str, any]) -> None:
+    async def update_spool(self, spool_id: str, data: Dict[str, Any]) -> None:
         spool = await self.find_spool(spool_id)
         if spool:
             spool.update(data)
