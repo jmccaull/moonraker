@@ -231,8 +231,8 @@ class SpoolManagerHandler:
     def __init__(self, server, spool_manager: SpoolManager):
         self.spool_manager = spool_manager
         self.server = server
-        self.highest_e_pos = 0
-        self.extruded = 0
+        self.highest_e_pos = 0.0
+        self.extruded = 0.0
 
         self._register_listeners()
         self._register_endpoints()
