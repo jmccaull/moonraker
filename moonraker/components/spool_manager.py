@@ -36,7 +36,7 @@ class Spool(Validation):
 
     def __init__(self, data={}):
         self.name: str = None
-        self.active: bool = True
+        self.active: bool = False
         self.color_name: str = None
         self.color_code: str = None
         self.vendor: str = None
@@ -129,7 +129,7 @@ class SpoolManager:
                 if data.get('material') else None
             if not density:
                 raise self.server.error(f'Density not provided and none found '
-                                        f'for material {data["material"]}')
+                                        f'for material: {data.get("material")}')
             data['density'] = density
         spool = Spool(data)
         missing_attrs = spool.validate()
@@ -271,7 +271,6 @@ class SpoolManagerHandler:
 
     def _e_position_from_status(self, status: Dict[str, Any]):
         position = status.get('toolhead', {}).get('position', [])
-        logging.debug(f"position: {position}")
         return position[3] if len(position) > 0 else None
 
     def _handle_status_update(self, status: Dict[str, Any]) -> None:
