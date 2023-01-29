@@ -256,7 +256,9 @@ class SpoolManagerHandler:
         self.server.register_event_handler(
             'server:status_update', self._handle_status_update)
         sub: Dict[str, Optional[List[str]]] = {'toolhead': ['position']}
+        logging.debug("sub: %s", sub)
         result = await self.klippy_apis.subscribe_objects(sub)
+        logging.debug("result: %s", result)
         initial_e_pos = self._e_position_from_status(result)
         if initial_e_pos:
             self.lastEpos = initial_e_pos
@@ -267,6 +269,7 @@ class SpoolManagerHandler:
 
     def _e_position_from_status(self, status: Dict[str, Any]):
         position = status.get('toolhead', {}).get('position', [])
+        logging.debug(f"position: {position}")
         return position[3] if len(position) > 0 else None
 
     def _handle_status_update(self, status: Dict[str, Any]) -> None:
