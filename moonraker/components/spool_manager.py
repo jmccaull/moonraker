@@ -181,48 +181,49 @@ class SpoolManager:
         spool_id = await self.get_active_spool_id()
         spool = await self.find_spool(spool_id)
 
-        if spool and self.handler.extruded > 0:
-            used_length = self.handler.extruded
+        if self.handler.extruded > 0:
+            if not spool:
+                logging.info("Active spool is not set, tracking ignored")
+            else:
+                used_length = self.handler.extruded
 
-            old_used_length = spool.used_length
-            old_used_weight = spool.used_weight()
+                old_used_length = spool.used_length
+                old_used_weight = spool.used_weight()
 
-            new_used_length = old_used_length + used_length
-            spool.used_length = new_used_length
+                new_used_length = old_used_length + used_length
+                spool.used_length = new_used_length
 
-            new_used_weight = spool.used_weight()
+                new_used_weight = spool.used_weight()
 
-            used_weight = new_used_weight - old_used_weight
+                used_weight = new_used_weight - old_used_weight
 
-            used_cost = 0
-            if spool.cost and used_weight and spool.total_weight:
-                used_cost = used_weight / spool.total_weight * spool.cost
+                used_cost = 0
+                if spool.cost and used_weight and spool.total_weight:
+                    used_cost = used_weight / spool.total_weight * spool.cost
 
-            if not spool.first_used:
-                spool.first_used = time.time()
+                if not spool.first_used:
+                    spool.first_used = time.time()
 
-            spool.last_used = time.time()
+                spool.last_used = time.time()
 
-            await self.update_spool(spool_id, spool.serialize())
+                await self.update_spool(spool_id, spool.serialize())
 
-            metadata = {'spool_id': spool_id,
-                        'used_weight': used_weight,
-                        'cost': used_cost}
+                metadata = {'spool_id': spool_id,
+                            'used_weight': used_weight,
+                            'cost': used_cost}
 
-            self.server.send_event('spool_manager:filament_used', metadata)
+                self.server.send_event('spool_manager:filament_used', metadata)
 
-            self.handler.extruded = 0
+                self.handler.extruded = 0
 
-            logging.info(f'Tracking filament usage, spool_id: {spool_id}, ' +
-                         f'length: {used_length}, ' +
-                         f'old used_length: {old_used_length}, ' +
-                         f'new used_length: {new_used_length} ' +
-                         f'weight: {used_weight}, ' +
-                         f'old used_weight: {old_used_weight}, ' +
-                         f'new used_weight: {new_used_weight}, ' +
-                         f'cost: {used_cost}')
-        else:
-            logging.info("Active spool is not set, tracking ignored")
+                logging.info(f'Tracking filament usage, spool_id: {spool_id}, ' +
+                             f'length: {used_length}, ' +
+                             f'old used_length: {old_used_length}, ' +
+                             f'new used_length: {new_used_length} ' +
+                             f'weight: {used_weight}, ' +
+                             f'old used_weight: {old_used_weight}, ' +
+                             f'new used_weight: {new_used_weight}, ' +
+                             f'cost: {used_cost}')
 
 
 class SpoolManagerHandler:
