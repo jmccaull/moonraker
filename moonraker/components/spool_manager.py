@@ -260,6 +260,7 @@ class SpoolManagerHandler:
         result = await self.klippy_apis.subscribe_objects(sub)
         logging.debug("result: %s", result)
         initial_e_pos = self._e_position_from_status(result)
+        logging.debug("initial epos %s", initial_e_pos)
         if initial_e_pos is not None:
             self.lastEpos = initial_e_pos
             logging.info("Spool manager handler subscribed to epos")
