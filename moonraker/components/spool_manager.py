@@ -161,15 +161,15 @@ class SpoolManager:
 
         return
 
-    def delete_spool(self, spool_id: str) -> None:
-        self.db.delete(spool_id)
+    async def delete_spool(self, spool_id: str) -> None:
+        await self.db.delete(spool_id)
         logging.info(f'Spool id: {spool_id} deleted.')
         self.server.send_event('spool_manager:spool_deleted',
                                {'spool_id': spool_id})
         return
 
-    def find_all_spools(self, show_inactive: bool) -> dict:
-        spools = self.db.items()
+    async def find_all_spools(self, show_inactive: bool) -> dict:
+        spools = await self.db.items()
         spools = {k: Spool(v).serialize(include_calculated=True)
                   for k, v in spools
                   if show_inactive is True or v['active'] is True}
@@ -292,24 +292,26 @@ class SpoolManagerHandler:
             else:
                 return None
         elif action == 'POST':
+            logging.debug("post stool event %s", web_request)
             spool_id = web_request.get('id', None)
-
+            logging.debug("initial id check %s", spool_id)
             if spool_id:
                 await self.spool_manager.update_spool(spool_id,
                                                       web_request.args)
                 return 'OK'
             else:
-                spool_id = self.spool_manager.add_spool(web_request.args)
+                spool_id = await self.spool_manager.add_spool(web_request.args)
+                logging.debug("adding spool %s", spool_id)
                 return {'spool_added': spool_id}
         elif action == 'DELETE':
             spool_id = web_request.get_str('id')
-            self.spool_manager.delete_spool(spool_id)
+            await self.spool_manager.delete_spool(spool_id)
             return 'OK'
 
     async def _handle_spools_list(self, web_request: WebRequest):
         await self.spool_manager.track_filament_usage()
         show_inactive = web_request.get_boolean('show_inactive', False)
-        spools = self.spool_manager.find_all_spools(show_inactive)
+        spools = await self.spool_manager.find_all_spools(show_inactive)
 
         return {'spools': spools}
 
@@ -322,7 +324,7 @@ class SpoolManagerHandler:
             return {"spool_id": spool_id}
         elif action == 'POST':
             spool_id = web_request.get_str('id')
-            if self.spool_manager.set_active_spool(spool_id):
+            if await self.spool_manager.set_active_spool(spool_id):
                 return 'OK'
             else:
                 raise self.server.error(
