@@ -124,8 +124,8 @@ class SpoolManager:
         if await self.db.length() >= MAX_SPOOLS:
             raise self.server.error(
                 f"Reached maximum number of spools: {MAX_SPOOLS}", 400)
-        if not data['density']:
-            density = self.materials.get(data['material'], {}).get('density')
+        if not data.get('density'):
+            density = self.materials.get(data.get('material')).get('density')
             if not density:
                 raise self.server.error(f'Density not provided and none found '
                                         f'for material {data["material"]}')
