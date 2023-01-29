@@ -328,7 +328,7 @@ class SpoolManagerHandler:
                 raise self.server.error(
                     f"Spool id {spool_id} not found", 404)
 
-    async def _handle_materials_list(self):
+    async def _handle_materials_list(self, web_request: WebRequest):
         return {'materials': self.spool_manager.materials}
 
 
