@@ -216,7 +216,8 @@ class SpoolManager:
 
                 self.handler.extruded = 0
 
-                logging.info(f'Tracking filament usage, spool_id: {spool_id}, ' +
+                logging.info(f'Tracking filament usage, '
+                             f'spool_id: {spool_id}, ' +
                              f'length: {used_length}, ' +
                              f'old used_length: {old_used_length}, ' +
                              f'new used_length: {new_used_length} ' +
@@ -230,7 +231,7 @@ class SpoolManagerHandler:
     def __init__(self, server, spool_manager: SpoolManager):
         self.spool_manager = spool_manager
         self.server = server
-        self.lastEpos = 0
+        self.highest_e_pos = 0
         self.extruded = 0
 
         self._register_listeners()
@@ -261,25 +262,26 @@ class SpoolManagerHandler:
         logging.debug("sub: %s", sub)
         result = await self.klippy_apis.subscribe_objects(sub)
         logging.debug("result: %s", result)
-        initial_e_pos = self._e_position_from_status(result)
+        initial_e_pos = self._eposition_from_status(result)
         logging.debug("initial epos %s", initial_e_pos)
         if initial_e_pos is not None:
-            self.lastEpos = initial_e_pos
+            self.highest_e_pos = initial_e_pos
             logging.info("Spool manager handler subscribed to epos")
         else:
             logging.error("Spool manager unable to subscribe to epos")
             raise self.server.error('Unable to subscribe to e position')
 
-    def _e_position_from_status(self, status: Dict[str, Any]):
+    def _eposition_from_status(self, status: Dict[str, Any]) -> Optional[float]:
         position = status.get('toolhead', {}).get('position', [])
         return position[3] if len(position) > 0 else None
 
     def _handle_status_update(self, status: Dict[str, Any]) -> None:
-        epos = self._e_position_from_status(status)
-        if epos and epos > self.lastEpos:
-            self.extruded = epos - self.lastEpos
-            self.lastEpos = epos
-            logging.debug("epos updated to %s", self.lastEpos)
+        epos = self._eposition_from_status(status)
+        if epos and epos > self.highest_e_pos:
+            self.extruded += epos - self.highest_e_pos
+            self.highest_e_pos = epos
+            logging.debug("extuded: %s, highest_epos: %s",
+                          self.extruded, self.highest_e_pos)
 
     async def _handle_spool_request(self, web_request: WebRequest):
         await self.spool_manager.track_filament_usage()
