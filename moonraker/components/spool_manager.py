@@ -31,7 +31,8 @@ class Validation:
 
 
 class Spool(Validation):
-    _required_attributes: Set[str] = {'name'}
+    _required_attributes: Set[str] = {'name', "diameter", "total_weight",
+                                      'material'}
 
     def __init__(self, data={}):
         self.name: str = None
@@ -90,14 +91,13 @@ class SpoolManager:
     def on_exit(self):
         self.track_filament_usage()
 
-    def _parse_materials_cfg(self, config):
+    def _parse_materials_cfg(self, config) -> Dict[str, Dict[str, Any]]:
         materials_cfg = config.get('materials', '').strip()
         lines = [line.strip().split(',') for
                  line in materials_cfg.split('\n') if line.strip()]
-        return {f.strip(): {'density': d.strip()} for f, d in lines}
+        return {f.strip(): {'density': float(d.strip())} for f, d in lines}
 
     async def find_spool(self, spool_id: str) -> Optional[Spool]:
-        # TODO is this correct?
         spool = await self.db.get(spool_id, None)
 
         if spool:
@@ -124,7 +124,12 @@ class SpoolManager:
         if await self.db.length() >= MAX_SPOOLS:
             raise self.server.error(
                 f"Reached maximum number of spools: {MAX_SPOOLS}", 400)
-
+        if not data['density']:
+            density = self.materials.get(data['material'], {}).get('density')
+            if not density:
+                raise self.server.error(f'Density not provided and none found '
+                                        f'for material {data["material"]}')
+            data['density'] = density
         spool = Spool(data)
         missing_attrs = spool.validate()
         if missing_attrs:
@@ -252,11 +257,13 @@ class SpoolManagerHandler:
             'server:status_update', self._handle_status_update)
         sub: Dict[str, Optional[List[str]]] = {'toolhead': ['position']}
         result = await self.klippy_apis.subscribe_objects(sub)
-        if self._e_position_from_status(result):
+        initial_e_pos = self._e_position_from_status(result)
+        if initial_e_pos:
+            self.lastEpos = initial_e_pos
             logging.info("Spool manager handler subscribed to epos")
         else:
             logging.error("Spool manager unable to subscribe to epos")
-            # TODO remove/disable component?
+            raise self.server.error('Unable to subscribe to e position')
 
     def _e_position_from_status(self, status: Dict[str, Any]):
         position = status.get('toolhead', {}).get('position', [])
