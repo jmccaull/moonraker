@@ -96,31 +96,32 @@ class SpoolManager:
         for template_name in template_names:
             config_helper = config[template_name]
             template: Dict[str, Any] = {}
-            vendor = config_helper.get('vendor')
+
+            vendor = config_helper.get('vendor', None)
             if vendor:
                 template['vendor'] = vendor
 
-            material = config_helper.get('material')
+            material = config_helper.get('material', None)
             if material:
                 template['material'] = material
 
-            density = config_helper.get('density')
+            density = config_helper.get('density', None)
             if density:
                 template['density'] = float(density)
 
-            diameter = config_helper.get('diameter')
+            diameter = config_helper.get('diameter', None)
             if diameter:
                 template['diameter'] = float(diameter)
 
-            total_weight = config_helper.get('total_weight')
+            total_weight = config_helper.get('total_weight', None)
             if total_weight:
                 template['total_weight'] = float(total_weight)
 
-            spool_weight = config_helper.get('spool_weight')
+            spool_weight = config_helper.get('spool_weight', None)
             if spool_weight:
                 template['spool_weight'] = float(spool_weight)
 
-            cost = config_helper.get('cost')
+            cost = config_helper.get('cost', None)
             if cost:
                 template['cost'] = float(cost)
 
