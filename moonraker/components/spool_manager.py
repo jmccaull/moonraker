@@ -93,8 +93,8 @@ class SpoolManager:
         template_names = config.get_prefix_sections('spool_manager template')
         logging.debug("template names: %s", template_names)
         templates: Dict[str, Dict[str, Any]] = {}
-        for template_name in template_names:
-            config_helper = config[template_name]
+        for template_path in template_names:
+            config_helper = config[template_path]
             template: Dict[str, Any] = {}
 
             vendor = config_helper.get('vendor', None)
@@ -125,7 +125,9 @@ class SpoolManager:
             if cost:
                 template['cost'] = float(cost)
 
-            templates[str(template_name).upper()] = template
+            template_name = str(template_path).upper()\
+                .replace("SPOOL_MANAGER TEMPLATE ")
+            templates[template_name] = template
         logging.debug('templates: %s', templates)
         return templates
 
