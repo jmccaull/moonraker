@@ -27,11 +27,11 @@ class Validation:
                         self._required_attributes)
         return set(failed)
 
-    _required_attributes: Set[str] = {"name"}
+    _required_attributes: Set[str] = {}
 
 
 class Spool(Validation):
-    _required_attributes: Set[str] = {'name', "diameter", "total_weight",
+    _required_attributes: Set[str] = {"diameter", "total_weight",
                                       'material'}
 
     def __init__(self, data={}):
@@ -125,7 +125,7 @@ class SpoolManager:
             if cost:
                 template['cost'] = float(cost)
 
-            templates[template_name] = template
+            templates[str(template_name).upper()] = template
         logging.debug('templates: %s', templates)
         return templates
 
@@ -159,7 +159,7 @@ class SpoolManager:
         template_name = data['template']
         spool_data: Dict[str, Any] = {}
         if template_name:
-            spool_data.update(self.templates[template_name])
+            spool_data.update(self.templates[str(template_name).upper()])
         spool_data.update(data)
         if not spool_data.get('density'):
             raise self.server.error('Density not provided')
