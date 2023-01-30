@@ -126,7 +126,7 @@ class SpoolManager:
                 template['cost'] = float(cost)
 
             template_name = str(template_path).upper()\
-                .replace("SPOOL_MANAGER TEMPLATE ")
+                .replace('SPOOL_MANAGER TEMPLATE ', '')
             templates[template_name] = template
         logging.debug('templates: %s', templates)
         return templates
