@@ -20,6 +20,19 @@ SPOOL_NAMESPACE = "spool_manager"
 MOONRAKER_NAMESPACE = "moonraker"
 ACTIVE_SPOOL_KEY = "spool_manager.active_spool_id"
 MAX_SPOOLS = 1000
+SPOOL_ATTRIBUTES = {'name': str,
+        'color': str,
+        'vendor': str,
+        'material': str,
+        'density': float,
+        'diameter': float,
+        'total_weight': float,
+        'used_length': float,
+        'spool_weight': float,
+        'first_used': float,
+        'last_used': float,
+        'cost': float,
+        'commen': str}
 
 
 class Validation:
@@ -96,7 +109,11 @@ class SpoolManager:
         configs = {name: config[name] for name in template_names}
         logging.debug("configs: %s", configs)
         logging.debug("vals: %s", configs.values())
-        return configs
+        toReturn = {name: {attribute: type(config.get(attribute))
+        if config.get(attribute) else None for attribute, type in
+                       SPOOL_ATTRIBUTES} for name in template_names}
+        logging.debug('final %s', toReturn)
+        return toReturn
         # materials_cfg = config.get('materials', '').strip()
         # lines = [line.strip().split(',') for
         #          line in materials_cfg.split('\n') if line.strip()]
