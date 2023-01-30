@@ -92,9 +92,10 @@ class SpoolManager:
 
     def _parse_materials_cfg(self, config: ConfigHelper) -> Dict[str, Dict[str, Any]]:
         template_names = config.get_prefix_sections('spool_manager template')
-        logging.debug(template_names)
+        logging.debug("template names: %s", template_names)
         configs = {name: config.getsection(name) for name in template_names}
-        logging.debug(configs)
+        logging.debug("configs: %s", configs)
+        logging.debug("vals: %s", configs.values())
         converted: Dict[str, Dict[str, Any]] = {name: value.get_parsed_config()
                                                 for name, value in configs}
         logging.debug(converted)
