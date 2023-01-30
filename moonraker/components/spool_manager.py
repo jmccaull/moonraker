@@ -21,6 +21,7 @@ MOONRAKER_NAMESPACE = "moonraker"
 ACTIVE_SPOOL_KEY = "spool_manager.active_spool_id"
 MAX_SPOOLS = 1000
 
+
 class Validation:
     def validate(self) -> Set[str]:
         failed = filter(lambda f: self.__getattribute__(f) is None,
@@ -90,7 +91,8 @@ class SpoolManager:
     def on_exit(self):
         self.track_filament_usage()
 
-    def _parse_materials_cfg(self, config: ConfigHelper) -> Dict[str, Dict[str, Any]]:
+    def _parse_materials_cfg(self, config: ConfigHelper) -> \
+        Dict[str, Dict[str, Any]]:
         template_names = config.get_prefix_sections('spool_manager template')
         logging.debug("template names: %s", template_names)
         templates: Dict[str, Dict[str, Any]] = {}
@@ -126,7 +128,7 @@ class SpoolManager:
             if cost:
                 template['cost'] = float(cost)
 
-            template_name = str(template_path).upper()\
+            template_name = str(template_path).upper() \
                 .replace('SPOOL_MANAGER TEMPLATE ', '')
             templates[template_name] = template
         logging.debug('templates: %s', templates)
