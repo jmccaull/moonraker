@@ -331,12 +331,11 @@ class SpoolManagerHandler:
             return {'spools': spools}
         elif action == 'POST':
             spools: [Dict[str, Any]] = web_request.get('spools')
-            return {'spools':
-                        map(lambda spool:
-                            await self._update_single_spool(spool), spools)}
+            return {'spools': await self._update_single_spool(spool)
+                    for spool in spools}
         elif action == 'DELETE':
             ids: [str] = web_request.get('ids')
-            return map(lambda id: await self._delete_single_spool(id), ids)
+            return [await self._delete_single_spool(id) for id in ids]
 
     async def _handle_active_spool(self, web_request: WebRequest):
         await self.spool_manager.track_filament_usage()
