@@ -20,20 +20,6 @@ SPOOL_NAMESPACE = "spool_manager"
 MOONRAKER_NAMESPACE = "moonraker"
 ACTIVE_SPOOL_KEY = "spool_manager.active_spool_id"
 MAX_SPOOLS = 1000
-SPOOL_ATTRIBUTES = {'name': str,
-        'color': str,
-        'vendor': str,
-        'material': str,
-        'density': float,
-        'diameter': float,
-        'total_weight': float,
-        'used_length': float,
-        'spool_weight': float,
-        'first_used': float,
-        'last_used': float,
-        'cost': float,
-        'commen': str}
-
 
 class Validation:
     def validate(self) -> Set[str]:
@@ -89,7 +75,7 @@ class SpoolManager:
     def __init__(self, config):
         self.server = config.get_server()
 
-        self.materials = self._parse_materials_cfg(config)
+        self.templates = self._parse_materials_cfg(config)
 
         database = self.server.lookup_component("database")
         database.register_local_namespace(SPOOL_NAMESPACE)
@@ -106,18 +92,41 @@ class SpoolManager:
     def _parse_materials_cfg(self, config: ConfigHelper) -> Dict[str, Dict[str, Any]]:
         template_names = config.get_prefix_sections('spool_manager template')
         logging.debug("template names: %s", template_names)
-        configs = {name: config[name] for name in template_names}
-        logging.debug("configs: %s", configs)
-        logging.debug("vals: %s", configs.values())
-        toReturn = {name: {attribute: type(config.get(attribute))
-        if config.get(attribute) else None for attribute, type in
-                       SPOOL_ATTRIBUTES} for name in template_names}
-        logging.debug('final %s', toReturn)
-        return toReturn
-        # materials_cfg = config.get('materials', '').strip()
-        # lines = [line.strip().split(',') for
-        #          line in materials_cfg.split('\n') if line.strip()]
-        # return {f.strip(): {'density': float(d.strip())} for f, d in lines}
+        templates: Dict[str, Dict[str, Any]] = {}
+        for template_name in template_names:
+            config_helper = config[template_name]
+            template: Dict[str, Any] = {}
+            vendor = config_helper.get('vendor')
+            if vendor:
+                template['vendor'] = vendor
+
+            material = config_helper.get('material')
+            if material:
+                template['material'] = material
+
+            density = config_helper.get('density')
+            if density:
+                template['density'] = float(density)
+
+            diameter = config_helper.get('diameter')
+            if diameter:
+                template['diameter'] = float(diameter)
+
+            total_weight = config_helper.get('total_weight')
+            if total_weight:
+                template['total_weight'] = float(total_weight)
+
+            spool_weight = config_helper.get('spool_weight')
+            if spool_weight:
+                template['spool_weight'] = float(spool_weight)
+
+            cost = config_helper.get('cost')
+            if cost:
+                template['cost'] = float(cost)
+
+            templates[template_name] = template
+        logging.debug('templates: %s', templates)
+        return templates
 
     async def find_spool(self, spool_id: str) -> Optional[Spool]:
         spool = await self.db.get(spool_id, None)
@@ -146,14 +155,14 @@ class SpoolManager:
         if await self.db.length() >= MAX_SPOOLS:
             raise self.server.error(
                 f"Reached maximum number of spools: {MAX_SPOOLS}", 400)
-        if not data.get('density'):
-            density = self.materials.get(data.get('material')).get('density') \
-                if data.get('material') else None
-            if not density:
-                raise self.server.error(f'Density not provided and none found '
-                                        f'for material: {data.get("material")}')
-            data['density'] = density
-        spool = Spool(data)
+        template_name = data['template']
+        spool_data: Dict[str, Any] = {}
+        if template_name:
+            spool_data.update(self.templates[template_name])
+        spool_data.update(data)
+        if not spool_data.get('density'):
+            raise self.server.error('Density not provided')
+        spool = Spool(spool_data)
         missing_attrs = spool.validate()
         if missing_attrs:
             raise self.server.error(
@@ -367,7 +376,7 @@ class SpoolManagerHandler:
                     f"Spool id {spool_id} not found", 404)
 
     async def _handle_materials_list(self, web_request: WebRequest):
-        return {'materials': self.spool_manager.materials}
+        return {'materials': self.spool_manager.templates}
 
 
 def load_component(config):
