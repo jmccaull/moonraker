@@ -36,6 +36,7 @@ class Spool(Validation):
 
     def __init__(self, data={}):
         self.name: str = None
+        self.active: bool = True
         self.color: str = None
         self.vendor: str = None
         self.material: str = None
@@ -203,10 +204,11 @@ class SpoolManager:
                                {'spool_id': spool_id})
         return
 
-    async def find_all_spools(self) -> dict:
+    async def find_all_spools(self, show_inactive: bool) -> dict:
         spools = await self.db.items()
         spools = {k: Spool(v).serialize(include_calculated=True)
-                  for k, v in spools}
+                  for k, v in spools
+                  if show_inactive is True or v['active'] is True}
 
         return dict(spools)
 
@@ -351,7 +353,8 @@ class SpoolManagerHandler:
         await self.spool_manager.track_filament_usage()
         action = web_request.get_action()
         if action == 'GET':
-            spools = await self.spool_manager.find_all_spools()
+            show_inactive = web_request.get_boolean('show_inactive', False)
+            spools = await self.spool_manager.find_all_spools(show_inactive)
             return {'spools': spools}
         elif action == 'POST':
             spools: [Dict[str, Any]] = web_request.get('spools')
