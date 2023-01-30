@@ -9,6 +9,8 @@ import time
 import math
 from typing import TYPE_CHECKING, Dict, Any, List
 
+from ..confighelper import ConfigHelper
+
 if TYPE_CHECKING:
     from typing import Set, Optional
     from database import NamespaceWrapper
@@ -36,9 +38,7 @@ class Spool(Validation):
 
     def __init__(self, data={}):
         self.name: str = None
-        self.active: bool = False
-        self.color_name: str = None
-        self.color_code: str = None
+        self.color: str = None
         self.vendor: str = None
         self.material: str = None
         self.density: float = None
@@ -91,11 +91,19 @@ class SpoolManager:
     def on_exit(self):
         self.track_filament_usage()
 
-    def _parse_materials_cfg(self, config) -> Dict[str, Dict[str, Any]]:
-        materials_cfg = config.get('materials', '').strip()
-        lines = [line.strip().split(',') for
-                 line in materials_cfg.split('\n') if line.strip()]
-        return {f.strip(): {'density': float(d.strip())} for f, d in lines}
+    def _parse_materials_cfg(self, config: ConfigHelper) -> Dict[str, Dict[str, Any]]:
+        template_names = config.get_prefix_sections('spool_manager template')
+        logging.debug(template_names)
+        configs = {name: config.getsection(name) for name in template_names}
+        logging.debug(configs)
+        converted: Dict[str, Dict[str, Any]] = {name: value.get_parsed_config()
+                                                for name, value in configs}
+        logging.debug(converted)
+        return converted
+        # materials_cfg = config.get('materials', '').strip()
+        # lines = [line.strip().split(',') for
+        #          line in materials_cfg.split('\n') if line.strip()]
+        # return {f.strip(): {'density': float(d.strip())} for f, d in lines}
 
     async def find_spool(self, spool_id: str) -> Optional[Spool]:
         spool = await self.db.get(spool_id, None)
@@ -247,7 +255,8 @@ class SpoolManagerHandler:
             "/spool_manager/spool", ['GET', 'POST', 'DELETE'],
             self._handle_spool_request)
         self.server.register_endpoint(
-            "/spool_manager/spool/list", ['GET'], self._handle_spools_list)
+            "/spool_manager/spool/list", ['GET', 'POST', 'DELETE'],
+            self._handle_spools_list)
         self.server.register_endpoint(
             "/spool_manager/spool/active", ['GET', 'POST'],
             self._handle_active_spool)
@@ -295,28 +304,39 @@ class SpoolManagerHandler:
             else:
                 return None
         elif action == 'POST':
-            logging.debug("post stool event %s", web_request)
-            spool_id = web_request.get('id', None)
-            logging.debug("initial id check %s", spool_id)
-            if spool_id:
-                await self.spool_manager.update_spool(spool_id,
-                                                      web_request.args)
-                return 'OK'
-            else:
-                spool_id = await self.spool_manager.add_spool(web_request.args)
-                logging.debug("adding spool %s", spool_id)
-                return {'spool_added': spool_id}
+            return await self._update_single_spool(web_request.args)
         elif action == 'DELETE':
-            spool_id = web_request.get_str('id')
-            await self.spool_manager.delete_spool(spool_id)
-            return 'OK'
+            return await self._delete_single_spool(web_request.get_str('id'))
+
+    async def _delete_single_spool(self, spool_id: str):
+        await self.spool_manager.delete_spool(spool_id)
+        return 'OK'
+
+    async def _update_single_spool(self, data: Dict[str: Any]):
+        spool_id = data.get('id', None)
+        logging.debug("initial id check %s", spool_id)
+        if spool_id:
+            await self.spool_manager.update_spool(spool_id, data)
+        else:
+            spool_id = await self.spool_manager.add_spool(data)
+            logging.debug("adding spool %s", spool_id)
+        return spool_id
 
     async def _handle_spools_list(self, web_request: WebRequest):
         await self.spool_manager.track_filament_usage()
-        show_inactive = web_request.get_boolean('show_inactive', False)
-        spools = await self.spool_manager.find_all_spools(show_inactive)
-
-        return {'spools': spools}
+        action = web_request.get_action()
+        if action == 'GET':
+            show_inactive = web_request.get_boolean('show_inactive', False)
+            spools = await self.spool_manager.find_all_spools(show_inactive)
+            return {'spools': spools}
+        elif action == 'POST':
+            spools: [Dict[str, Any]] = web_request.get('spools')
+            return {'spools':
+                        map(lambda spool:
+                            await self._update_single_spool(spool), spools)}
+        elif action == 'DELETE':
+            ids: [str] = web_request.get('ids')
+            return map(lambda id: await self._delete_single_spool(id), ids)
 
     async def _handle_active_spool(self, web_request: WebRequest):
         await self.spool_manager.track_filament_usage()
