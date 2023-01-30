@@ -31,7 +31,7 @@ class Validation:
 
 
 class Spool(Validation):
-    _required_attributes: Set[str] = {"diameter", "total_weight",
+    _required_attributes: Set[str] = {"diameter", "filament_weight",
                                       'material'}
 
     def __init__(self, data={}):
@@ -41,7 +41,7 @@ class Spool(Validation):
         self.material: str = None
         self.density: float = None
         self.diameter: float = None
-        self.total_weight: float = None
+        self.filament_weight: float = None
         self.used_length: float = 0
         self.spool_weight: float = None
         self.first_used: float = None
@@ -113,9 +113,9 @@ class SpoolManager:
             if diameter:
                 template['diameter'] = float(diameter)
 
-            total_weight = config_helper.get('total_weight', None)
-            if total_weight:
-                template['total_weight'] = float(total_weight)
+            filament_weight = config_helper.get('filament_weight', None)
+            if filament_weight:
+                template['filament_weight'] = float(filament_weight)
 
             spool_weight = config_helper.get('spool_weight', None)
             if spool_weight:
@@ -232,8 +232,8 @@ class SpoolManager:
                 used_weight = new_used_weight - old_used_weight
 
                 used_cost = 0
-                if spool.cost and used_weight and spool.total_weight:
-                    used_cost = used_weight / spool.total_weight * spool.cost
+                if spool.cost and used_weight and spool.filament_weight:
+                    used_cost = used_weight / spool.filament_weight * spool.cost
 
                 if not spool.first_used:
                     spool.first_used = time.time()
