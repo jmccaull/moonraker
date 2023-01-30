@@ -9,13 +9,12 @@ import time
 import math
 from typing import TYPE_CHECKING, Dict, Any, List
 
-from ..confighelper import ConfigHelper
-
 if TYPE_CHECKING:
     from typing import Set, Optional
     from database import NamespaceWrapper
     from moonraker.websockets import WebRequest
     from .klippy_apis import KlippyAPI as APIComp
+    from confighelper import ConfigHelper
 
 SPOOL_NAMESPACE = "spool_manager"
 MOONRAKER_NAMESPACE = "moonraker"
